@@ -1,0 +1,349 @@
+#!/usr/bin/php -q
+<?php
+/**
+ * @author Patrik Hartwig
+ * @copyright 2013
+ * Version 2.0.2
+ * nohup php /jpi/jpi < /dev/null > /dev/null 2>&1 &
+ */
+error_reporting(E_ERROR | E_WARNING | E_PARSE);
+
+$jpiPool = "/jpi/putpath"; //path to storage pool;
+
+$jpiStore[] = "/mnt/first"; //path to storage point;
+$jpiStore[] = "/mnt/second"; //path to storage point;
+$jpiStore[] = "/mnt/third"; //path to storage point;
+
+//Dont Edit Below this line.
+
+$script_path = dirname(__FILE__);
+chdir($script_path);
+
+if($argv[1] == "status") {
+    $total = 0;
+    $total_free = 0;
+    
+    function bytesToSize1024($bytes, $precision = 2)
+    {
+        $unit = array('B','KB','MB','GB','TB','PB','EB');
+        return @round(
+            $bytes / pow(1024, ($i = floor(log($bytes, 1024)))), $precision
+        ).$unit[$i];
+    }
+    
+    foreach($jpiStore as $value) {
+        if(is_dir($value)) {
+            $total_free = $total_free + disk_free_space($value);
+            $total = $total + disk_total_space($value);
+            echo $value."\t".' => '."\t".bytesToSize1024(disk_free_space($value)).'/'.bytesToSize1024(disk_total_space($value))."\t".round((disk_free_space($value)/disk_total_space($value))*100)."%\n";
+        }
+    }
+    echo "Total\t".' => '."\t".bytesToSize1024($total_free).'/'.bytesToSize1024($total)."\t".round(($total_free/$total)*100)."%\n";
+    exit;
+}
+
+if($argv[1] == "fix") jpiFix();
+
+if($argv[1] == "stop") {
+    fwrite(STDOUT, "Stopping JPI Daemon\n");
+    shell_exec("kill -9 $(ps aux | grep '[j]pi dae' | awk '{print $2}')");
+    exit;
+}
+if($argv[1] == "restart") {
+    global $script_path;
+    shell_exec("kill $(ps aux | grep '[j]pi dae' | awk '{print $2}')");
+    fwrite(STDOUT, "Stopping JPI Daemon\n");
+}
+
+if($argv[1] != "dae") {
+    fwrite(STDOUT, "Starting JPI Daemon\n");
+    sleep(1);
+    shell_exec("nohup php ".__FILE__." dae < /dev/null > /dev/null 2>&1 &");
+    exit;
+}
+
+//Pre Checks/Runs
+//Fix file system
+if(!is_dir($jpiPool)) jpiLog('Pool path "'.$jpiPool.'" is not a Directory, if it was there and isnt now i suggest "jpi fix" command', 'exit');
+$jpiIndex = getIndex();
+
+//functions
+
+function jpiFix() {
+    global $jpiPool;
+    global $jpiIndex;
+    $jpiIndex = getIndex();
+    if(count($jpiIndex) < 1) {
+        fwrite(STDOUT, 'Index file is empty attempting to rebuild.'."\n");
+        rebuildIndex();
+        if(count($jpiIndex) < 1) {
+            fwrite(STDOUT, 'Index rebuild failed.'."\n");
+        }
+    } else {
+        fwrite(STDOUT, 'Index is in good shape :).'."\n");
+    }
+    if(!is_dir($jpiPool)) {
+        fwrite(STDOUT, 'jpiPool is not a directory trying to recreate.'."\n");
+        if(mkdir($jpiPool)) {
+            fwrite(STDOUT, 'Success creating jpiPool Directory.'."\n");
+        }else{
+            fwrite(STDOUT, 'failed Creating jpiPool Directory, check the jpiPool directory exists and run "jpi fix" again.'."\n");
+            exit;
+        }
+    }
+    if((count(scandir($jpiPool)) == 2)&&(count($jpiIndex) > 1)) {
+        fwrite(STDOUT, 'jpiPool seems to be empty, refilling from index'."\n");
+        foreach($jpiIndex as $key => $value) {
+            foreach(jpiStore($key) as $skey => $sval) {
+                if($key == $skey) {
+                    $blank = '';
+                    foreach(explode(DIRECTORY_SEPARATOR, dirname($value)) as $dir){
+                        $blank .= DIRECTORY_SEPARATOR.$dir;
+                        if(!is_dir($blank)) mkdir($blank);
+                    }
+                    symlink($sval, $value);
+                }
+            }
+        }
+    }
+    fwrite(STDOUT, 'All should be in good order now! :D'."\n");
+    exit;
+}
+
+function getIndex($w = 't') {
+    $jpiIndex = '';
+    if($w = 's') {
+        foreach(sList() as $sl) {
+            $nIndex = @file_get_contents($sl.DIRECTORY_SEPARATOR.'jpiIndex.json');
+            $jpiIndex = (strlen($nIndex) > strlen($jpiIndex)) ? $nIndex : $jpiIndex;
+        }
+    }else{
+        foreach(sList() as $sl) {
+            if(file_exists($sl.DIRECTORY_SEPARATOR.'jpiIndex.json')){
+                $nIndex = @file_get_contents($sl.DIRECTORY_SEPARATOR.'jpiIndex.json');
+                $jpiIndex = (filemtime($sl.DIRECTORY_SEPARATOR.'jpiIndex.json') > filemtime($sl.DIRECTORY_SEPARATOR.'jpiIndex.json')) ? $nIndex : $jpiIndex;
+            }
+        }
+    }
+
+    $jpiIndex = json_decode($jpiIndex, true);
+    if(!is_array($jpiIndex)) $jpiIndex = array();
+    return $jpiIndex;
+}
+$jpiLastError = '';
+function jpiLog($text, $output = false) {
+    global $jpiLastError;
+    if($text == $jpiLastError) return false;
+    $jpiLastError = $text;
+    if($output) fwrite(STDOUT, $text."\n");
+    fwrite(fopen('/var/log/jpi.log', 'a'), date("Y-m-d H:i:s").' - '.$text."\n");
+    if($output === 'exit') {
+        jpiDex();
+        exit;
+    }else {
+        okay();
+    }
+}
+
+function okay() {
+    global $argv, $jpiIndex, $jpiPool;
+    if($argv[1] == 'fix') return false;
+    if(!is_dir($jpiPool)) jpiLog('Pool is Missing! run "jpi fix" to rebuild pool.', 'exit'); //checks to see pool hasnt gone anywhere
+    if((count(scandir($jpiPool)) == 2)&&(count($jpiIndex) > 1)) jpiLog('Pool is Missing! run "jpi fix" to rebuild pool.', 'exit'); //checks to see pool isnt empty if index
+    if((count(scandir($jpiPool)) > 2)&&(count($jpiIndex) < 1)&&(count(scandir(end(slist()))) > 10)) jpiLog('Index seems to be missing! run "jpi fix" to rebuild index.', 'exit'); //checks to see pool isnt empty if index
+}
+
+function sList() {
+    global $jpiStore;
+    shuffle($jpiStore);
+    if(is_array($jpiStore)) foreach($jpiStore as $path) if((is_dir($path))&&(is_writable($path))) $ret[] = rtrim(realpath($path), DIRECTORY_SEPARATOR);
+    if(is_array($jpiStore)) foreach($jpiStore as $path) if((!is_dir($path))OR(!is_writable($path))) jpiLog('store path "'.$path.'" is not a valid directory', true);
+    foreach($ret as $spath) if(!is_dir($spath.DIRECTORY_SEPARATOR.'recycle')) mkdir($spath.DIRECTORY_SEPARATOR.'recycle');
+    return $ret;
+}
+
+function jpiCode($str) {
+    global $jpiIndex;
+    if(preg_match('/^[a-f0-9]{32}$/', substr($str,3))) return $jpiIndex[$str];
+    $hash = 'jpi'.md5($str);
+    while(isset($jpiIndex[$hash])) $hash = 'jpi'.md5($str).rand(0,999);
+    $jpiIndex[$hash] = $str;
+    return $hash;
+}
+
+function jpiLocation($sL = 0) {
+    foreach(sList() as $path) {
+        $dF = disk_free_space($path);
+        $aPath = ($dF > $sL) ? $path : $aPath;
+        $sL = ($dF > $sL) ? $dF : $sL;
+    }
+    return $aPath;
+}
+
+function jpiMove($file) {
+    if(!file_exists($file)) return false;
+    if(is_link($file)) return false;
+    $from = $file;
+    $to = jpiLocation().DIRECTORY_SEPARATOR.jpiCode($file);
+    jpiLog('Storing file '.$file.'" => "'.$to.'"', true);
+    copy($from, $to);
+    if(!file_exists($to)) {
+        exit('Failed to store "'.$from.'" to '.$to."\n");
+    }else{
+        unlink((filesize($from) == filesize($to)) ? $from : $to);
+        if(file_exists($to)) symlink($to, $from);
+        $from = $to;
+        preg_match('/\[RL([1,2,3,4,5])\]/', $file, $match);
+        $noDupe[] = dirname($to);
+        while($match[1] > 0) {
+            global $jpiStore;
+            $match[1] = ((count($jpiStore)-1) < $match[1]) ? (count($jpiStore)-1) : $match[1];
+            $to = end(sList()).DIRECTORY_SEPARATOR.str_replace('jpi', 'RL'.$match[1], basename($to));
+            if(!in_array(dirname($to), $noDupe)) {
+                sleep(1);
+                jpiLog('Storing redundant "'.$file.'" => "'.$to.'"', true);
+                copy($from, $to);
+                $noDupe[] = dirname($to);
+                if(filesize($from) == filesize($to)) $match[1]--;
+            }
+        }
+        unset($noDupe);
+    }
+}
+
+function jpiFileList($dir) {
+    global $jpiPool;
+    $dir = rtrim($dir, '/');
+    $contents = array();
+    okay();
+    foreach(scandir($dir) as $node) {
+        if ($node == '.')  continue;
+        if ($node == '..') continue;
+        if (is_dir($dir.DIRECTORY_SEPARATOR.$node)) {
+            $contents = array_merge($contents, jpiFileList($dir.DIRECTORY_SEPARATOR.$node));
+        } else {
+            $contents[] = $dir.DIRECTORY_SEPARATOR.$node;
+        }
+    }
+    return $contents;
+}
+
+function jpiStore($key = null) {
+    $contents = array();
+    $nc = array();
+    foreach(sList() as $path) $contents = array_merge($contents, jpiFileList($path));
+    foreach($contents as $path) {
+        $bn = basename($path);
+        if(!$key) {
+            if(preg_match('/^[a-f0-9]{32}$/', substr($bn,3))) $nc[$bn] = $path;
+        }else{
+            if(substr($bn, 3) == substr($key, 3)) $nc[$bn] = $path;
+        }
+    }
+    return $nc;
+}
+
+function rebuildIndex() {  //rebuilds index if need be, should never be run but its just incase.
+    global $jpiIndex, $jpiPool;
+    $jpiIndex = array();
+    foreach(jpiFileList($jpiPool) as $file) {
+        if(is_link($file)) {
+           $bn = basename(readlink($file));
+           $jpiIndex["$bn"] = $file;
+        }
+    }
+}
+
+function jpiCheck() { //checks for missing files and replaces redundants
+    global $jpiIndex;
+    foreach($jpiIndex as $key => $file) {
+        if(!is_link($file)) continue;
+        if(!file_exists(@readlink($file))){
+            preg_match('/\[RL([1,2,3,4,5])\]/', $file, $match);    
+            if($match[1] > 0) {
+                $jpiStore = jpiStore($key);
+                
+                foreach($jpiStore as $jkey => $red) {
+                    if(is_writable(dirname(readlink($file)))) {
+                        jpiLog('Missing Source for "'.$file.'", putting back "'.basename($red).'"', true);
+                        copy($red, readlink($file));
+                        break;
+                    }else{
+                        jpiLog('Missing Source for "'.$file.'", putting back "'.basename($red).'"', true);
+                        unlink($file);
+                        rename($red, dirname($red).DIRECTORY_SEPARATOR.'jpi'.substr($jkey, 3));
+                        symlink(dirname($red).DIRECTORY_SEPARATOR.'jpi'.substr($jkey, 3), $file);
+                    }
+                }
+            }else{
+                //source files is missing and wasnt redundant, not much we can do except hope it comes back one day. will be a good day
+            }
+        }
+    }
+
+}
+
+function jpiSyncRed() { //sync modified redunant files
+    $jpiStore = jpiStore();
+    foreach($jpiStore as $key => $path) {
+        if(substr($key, 0, 2) == 'RL') {
+            foreach($jpiStore as $ck => $checks) {
+                if((strstr($ck, substr($key, 3)))&&(substr($ck, 0, 3) == "jpi")){
+                    if((filesize($path) != filesize($checks))&&(file_exists($checks))) {
+                        jpiLog('Updating redunant modified source', true);
+                        copy($checks, $path);
+                    }
+                }
+            }
+        }
+    }
+}
+
+function jpiRenDel() { //checks for renamed or deleted files
+    global $jpiIndex, $jpiPool;
+    if(!is_array($jpiIndex)) return false;
+    foreach($jpiIndex as $key => $file) {
+        if(!is_link($file)) {
+            foreach(jpiFileList($jpiPool) as $chLink) {
+                if(basename(readlink($chLink)) == $key) {
+                    jpiLog('Link renamed, updating index.', true);
+                    $jpiIndex[$key] = $chLink;
+                    break;
+                }
+            }
+            if($jpiIndex[$key] == $file){
+                $jpiStore = jpiStore($key);
+                if(file_exists($jpiStore[$key])) {
+                    jpiLog('Link deleted, recycling source file', true);
+                    foreach($jpiStore as $jkey => $jval) {
+                        rename($jval, dirname($jval).DIRECTORY_SEPARATOR.'recycle'.DIRECTORY_SEPARATOR.basename($file));
+                        unset($jpiIndex[$key]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+function jpiDex() {
+    global $jpiIndex;
+    
+    if(is_array($jpiIndex)) {
+        fwrite(fopen(end(sList()).DIRECTORY_SEPARATOR.'jpiIndex.json', 'w+'), json_encode($jpiIndex));
+    }else{
+        return false;
+    }
+}
+
+//start Jpi loop
+while(1) {
+    foreach(jpiFileList($jpiPool) as $file) {
+        jpiMove($file);
+    }
+    jpiRenDel();
+    jpiDex();
+    jpiSyncRed();
+    jpiCheck();
+}
+
+?>
