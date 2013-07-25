@@ -1,6 +1,6 @@
 <p><b>What is JPI</b><br>
 JPI is a software storage pool for combining existing disk that use ext3 or ext4 to be combined storage. This is done by creating links to hashed files from their 'pool' path to their store path.<br>
-It is written in php5-cli which is its, only dependancy. JPI will work on all nix based systems with php5-cli installed.
+It is written in php5-cli which is its, only dependency. JPI will work on all nix based systems with php5-cli installed.
 </p>
 
 
