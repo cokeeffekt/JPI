@@ -3,7 +3,7 @@
 /**
  * @author Patrik Hartwig
  * @copyright 2013
- * Version 2.0.4
+ * Version 2.0.2
  * nohup php /jpi/jpi < /dev/null > /dev/null 2>&1 &
  */
 error_reporting(E_ERROR | E_WARNING | E_PARSE);
@@ -14,7 +14,7 @@ define(BR, "\n");
 preRunCheck(false);
 $jpiConfig;
 switch($argv[1]) {
-    case '-status':
+	case '-status':
 		echo 'Status'.BR;
 		if(file_exists('/etc/jpi/config.json')){
 			$jpiConfig = json_decode(file_get_contents('/etc/jpi/config.json'), true);
@@ -82,15 +82,15 @@ switch($argv[1]) {
 	break;
 	case '-add-store-path':
 		preRunCheck();
-
-		fwrite(STDOUT, "Path to first storePath:");
+		ns:
+		fwrite(STDOUT, "Path to new storePath:");
 	  	$firstStore = trim(fgets(STDIN));
 	  	if(is_writable($firstStore)) {
 	  		echo 'ok'.BR;
 	  		$jpiConfig['storePaths'][] = rtrim($firstStore, '/');
 	  	}else{
-	  		echo $firstStore.'is not a valid Path'.BR;
-	  		goto fs;
+	  		echo $firstStore.' is not a valid Path'.BR;
+	  		goto ns;
 	  	}
 	  	echo "Creating '/etc/jpi/config.json".BR;
 	  	fwrite(fopen('/etc/jpi/config.json', 'w'), json_encode($jpiConfig));
@@ -178,7 +178,7 @@ function setupJpi(){
   		echo 'ok'.BR;
   		$jpiConfig['storePaths'][] = rtrim($firstStore, '/');
   	}else{
-  		echo $firstStore.'is not a valid Path'.BR;
+  		echo $firstStore.' is not a valid Path'.BR;
   		goto fs;
   	}
   	echo "Creating '/etc/jpi/config.json".BR;
@@ -216,7 +216,7 @@ function findMissing() {
 			if(strpos($sl, basename($hash))) {
 				$match = dirname($sl).DIRECTORY_SEPARATOR.basename($hash);
 				if(file_exists($match)){
-					unlink($value);
+					@unlink($value);
 					unlink($oPath);
 					symlink($match, $oPath);
 					fwrite(fopen($match.'.jpi', 'w'), $oPath);
@@ -242,22 +242,33 @@ function checkDeleted(){
 	foreach($jpiConfig[storePaths] as $value) {
 		foreach(fileScan($value) as $jpiVal) {
 			if((strstr(basename($jpiVal), "JPI"))&&(strstr(basename($jpiVal), ".jpi"))) {
-				if(!file_exists(str_replace(".jpi", '', $jpiVal))) {
+				$locVal = stxr_replace(".jpi", '', $jpiVal);
+				if(!file_exists($locVal)) {
 					unlink($jpiVal);
 					continue;
 				}
 				$hashCheck = file_get_contents($jpiVal);
+
+				if(readlink($hashCheck) != $locVal) {
+					jpiLog("Source File is duplicate with no Link, Recycling file.");
+					recycle($locVal, $hashCheck);
+				}
+
 				if(!file_exists($hashCheck)) {
-					jpiLog("Recycling Source files for '$hashCheck'");
-					if(!is_dir(dirname($jpiVal).DIRECTORY_SEPARATOR.'recyle')) {
-						mkdir(dirname($jpiVal).DIRECTORY_SEPARATOR.'recyle');
-					}
-					rename(str_replace(".jpi", '', $jpiVal), dirname($jpiVal).DIRECTORY_SEPARATOR.'recyle'.DIRECTORY_SEPARATOR.basename($hashCheck));
-					unlink($jpiVal);
+					recycle($locVal, $hashCheck);
 				}
 			}
 		}
 	}
+}
+
+function recycle($locVal, $hashCheck) {
+	if(!is_dir(dirname($locVal).DIRECTORY_SEPARATOR.'recyle')) {
+		mkdir(dirname($locVal).DIRECTORY_SEPARATOR.'recyle');
+	}
+	jpiLog("Recycling Source files for '$hashCheck'");
+	rename($locVal, dirname($locVal).DIRECTORY_SEPARATOR.'recyle'.DIRECTORY_SEPARATOR.basename($hashCheck));
+	unlink($locVal.'.jpi');
 }
 
 function checkLink($linkPath) {
@@ -279,6 +290,7 @@ function checkLink($linkPath) {
 }
 
 function doMove($filePath) {
+	preRunCheck();
 	if(!is_link($filePath)&&(filesize($filePath)>1)) {
 		$time = time();
 		$fileStat = stat($filePath);
