@@ -242,7 +242,7 @@ function checkDeleted(){
 	foreach($jpiConfig[storePaths] as $value) {
 		foreach(fileScan($value) as $jpiVal) {
 			if((strstr(basename($jpiVal), "JPI"))&&(strstr(basename($jpiVal), ".jpi"))) {
-				$locVal = stxr_replace(".jpi", '', $jpiVal);
+				$locVal = str_replace(".jpi", '', $jpiVal);
 				if(!file_exists($locVal)) {
 					unlink($jpiVal);
 					continue;
